@@ -1,7 +1,7 @@
 // Keyboard and mouse, and the pointer lock that turns the mouse into look. Plain
 // browser APIs only: the game asks the canvas for pointer lock and reads movementX/Y
-// while it holds it. Right mouse aims; pressed edges are consumed once per frame
-// by main.js through takePressed, so B/G/E fire once per key press.
+// while it holds it. Right mouse aims. Pressed edges are consumed once per frame
+// by main.js through takePressed, so B, G and E fire once per key press.
 export function createInput(canvas, onLockChange) {
   const keys = new Set();
   const pressed = new Set();
@@ -44,12 +44,14 @@ export function createInput(canvas, onLockChange) {
   function requestLock() {
     canvas.requestPointerLock();
   }
+  // Take the accumulated mouse delta since the last frame, then zero it.
   function takeLook() {
     const look = { x: state.lookX, y: state.lookY };
     state.lookX = 0;
     state.lookY = 0;
     return look;
   }
+  // True once per physical press; the edge clears when read.
   function takePressed(code) {
     if (pressed.has(code)) {
       pressed.delete(code);

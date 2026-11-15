@@ -1,6 +1,6 @@
-// The look plan, in one place. Seven values; the lighting makes every shade the game
-// needs, so no other colour appears in the code. The same names are the CSS custom
-// properties in index.html.
+// The look plan, in one place. Seven values plus the slate accent; the lighting
+// makes every shade the game needs, so no other colour appears in the code. The
+// same names are the CSS custom properties in index.html.
 export const PALETTE = {
   canvas: '#17130f',
   surface: '#221c16',

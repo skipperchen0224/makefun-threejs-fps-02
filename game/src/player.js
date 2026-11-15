@@ -1,6 +1,6 @@
-// Player movement and health: acceleration, friction, gravity, crouch and jump,
-// resolved as a box against the world's colliders one axis at a time, so a wall never
-// swallows the player. Health lives here; damage and death are main.js's job.
+// Player movement and health. Acceleration, friction, gravity, crouch and jump,
+// resolved as a box against the world's colliders one axis at a time, so a wall
+// never swallows the player. Health lives here; damage and death are main.js's job.
 import * as THREE from 'three';
 
 const RADIUS = 0.34;
@@ -34,6 +34,8 @@ export function createPlayer(colliders, spawn) {
   const probe = new THREE.Box3();
   const wish = new THREE.Vector3();
 
+  // Would a box at (x, y, z) with this height overlap any collider? The lift
+  // shrinks the probe a touch so the floor never counts as a wall.
   function overlaps(x, y, z, height, lift) {
     probe.min.set(x - RADIUS, y + lift, z - RADIUS);
     probe.max.set(x + RADIUS, y + height - lift, z + RADIUS);
@@ -84,17 +86,19 @@ export function createPlayer(colliders, spawn) {
 
   function step(dt, keys) {
     if (!player.alive) return;
-    const crouching = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
-    if (crouching && !player.crouching) {
+    // Crouch: shrink the box, but only stand back up when the head is clear.
+    const wantCrouch = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
+    if (wantCrouch && !player.crouching) {
       player.crouching = true;
       player.height = CROUCH_HEIGHT;
-    } else if (!crouching && player.crouching && !overlaps(player.position.x, player.position.y, player.position.z, STAND_HEIGHT, 0.02)) {
+    } else if (!wantCrouch && player.crouching && !overlaps(player.position.x, player.position.y, player.position.z, STAND_HEIGHT, 0.02)) {
       player.crouching = false;
       player.height = STAND_HEIGHT;
     }
     const eyeTarget = player.crouching ? CROUCH_EYE : STAND_EYE;
     player.eye += (eyeTarget - player.eye) * Math.min(1, dt * 12);
 
+    // Wish direction from WASD, rotated by yaw.
     const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
     wish.set(0, 0, 0);

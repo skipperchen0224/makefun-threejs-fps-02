@@ -1,9 +1,9 @@
-// Bots: the other nine players. Each bot is a body with a head hitbox, a gun, health
-// and a small brain: walk a route to a site, hold an angle, engage what it sees,
-// and carry the bomb objective. Attackers plant; defenders retake and defuse.
-// A bot only shoots what it can see (a ray against the world's walls), after a
-// reaction delay, with accuracy that falls off with distance and target speed —
-// so stopping, peeking and crossfire matter on both sides.
+// Bots: the other nine players. Each one is a body with a head hitbox, a gun, health
+// and a small brain. It walks a route to a site, holds an angle, engages what it
+// sees, and works the bomb objective: attackers plant, defenders retake and defuse.
+// A bot only shoots what it can see — a ray against the world's walls — after a
+// reaction delay, with accuracy that falls off with distance and target speed. So
+// stopping, peeking and crossfire matter on both sides.
 import * as THREE from 'three';
 
 const BOT_SPEED = 3.4;
@@ -19,7 +19,8 @@ const BURST_PAUSE = 0.9;
 const EMBER_NAMES = ['Ash', 'Coal', 'Flint', 'Spark'];
 const SLATE_NAMES = ['Rook', 'Vane', 'Moss', 'Pike', 'Wren'];
 
-function makeBody(color) {
+// A bot's visible body: suit torso, skin head (the headshot box), dark legs and gun.
+function buildBody(color) {
   const group = new THREE.Group();
   const suit = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
   const skin = new THREE.MeshStandardMaterial({ color: 0xc9a37e, roughness: 0.8 });
@@ -50,9 +51,9 @@ export function createBots(scene, world, random) {
   const tracerMat = new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.85 });
   const enemyTracerMat = new THREE.LineBasicMaterial({ color: 0xff6b5e, transparent: true, opacity: 0.85 });
 
-  function spawnBot(team, name, spawn, role) {
+  function addBot(team, name, spawn, role) {
     const color = team === 'ember' ? 0xd98a2b : 0x5a8ab0;
-    const { group, head, torso, legs } = makeBody(color);
+    const { group, head, torso, legs } = buildBody(color);
     group.position.copy(spawn);
     scene.add(group);
     const bot = {
@@ -92,11 +93,12 @@ export function createBots(scene, world, random) {
       new THREE.Vector3(s.x - 1, 0, s.z - 3), new THREE.Vector3(s.x - 1, 0, s.z + 3),
       new THREE.Vector3(s.x, 0, s.z),
     ];
-    EMBER_NAMES.forEach((name, i) => spawnBot('ember', name, emberSpawns[i], i === 0 ? 'carrier' : 'rifle'));
-    SLATE_NAMES.forEach((name, i) => spawnBot('slate', name, slateSpawns[i], 'rifle'));
+    EMBER_NAMES.forEach((name, i) => addBot('ember', name, emberSpawns[i], i === 0 ? 'carrier' : 'rifle'));
+    SLATE_NAMES.forEach((name, i) => addBot('slate', name, slateSpawns[i], 'rifle'));
     return bots;
   }
 
+  // Is the straight line between two points free of walls?
   function losClear(from, to) {
     const dir = new THREE.Vector3().subVectors(to, from);
     const dist = dir.length();
@@ -117,6 +119,7 @@ export function createBots(scene, world, random) {
     bot.channel = null;
   }
 
+  // Walk toward a point, sliding along walls one axis at a time like the player.
   function moveToward(bot, target, dt, speedScale = 1) {
     const dx = target.x - bot.position.x;
     const dz = target.z - bot.position.z;
@@ -125,7 +128,6 @@ export function createBots(scene, world, random) {
     const stepLen = bot.speed * speedScale * dt;
     const nx = bot.position.x + (dx / dist) * Math.min(stepLen, dist);
     const nz = bot.position.z + (dz / dist) * Math.min(stepLen, dist);
-    // Axis-separated slide against the world, like the player.
     const probe = new THREE.Box3();
     probe.min.set(nx - BOT_RADIUS, bot.position.y + 0.05, bot.position.z - BOT_RADIUS);
     probe.max.set(nx + BOT_RADIUS, bot.position.y + BOT_HEIGHT - 0.05, bot.position.z + BOT_RADIUS);
@@ -164,6 +166,33 @@ export function createBots(scene, world, random) {
     return bots.filter((b) => b.team === team && b.alive);
   }
 
+  // Scan for the nearest visible enemy: the player or a living enemy bot. Only
+  // targets inside a 100-degree facing cone (or very close) with a clear line of
+  // sight count.
+  function findEnemy(bot, eye, ctx) {
+    const candidates = [];
+    if (ctx.playerAlive) {
+      candidates.push({ pos: new THREE.Vector3(ctx.playerPos.x, ctx.playerPos.y + 1.3, ctx.playerPos.z), kind: 'player', dist: 0 });
+    }
+    for (const other of bots) {
+      if (other.team !== bot.team && other.alive) {
+        candidates.push({ pos: new THREE.Vector3(other.position.x, other.position.y + 1.3, other.position.z), kind: 'bot', bot: other, dist: 0 });
+      }
+    }
+    let best = null;
+    let bestDist = Infinity;
+    for (const c of candidates) {
+      c.dist = eye.distanceTo(c.pos);
+      if (c.dist > 70) continue;
+      const to = new THREE.Vector3().subVectors(c.pos, eye).normalize();
+      const forward = new THREE.Vector3(-Math.sin(bot.yaw), 0, -Math.cos(bot.yaw));
+      if (c.dist > 4 && to.dot(forward) < 0.2) continue;
+      if (!losClear(eye, c.pos)) continue;
+      if (c.dist < bestDist) { bestDist = c.dist; best = c; }
+    }
+    return best === null ? null : { enemy: best, dist: bestDist };
+  }
+
   // One bot's brain, run at the fixed step. ctx carries the match: player state,
   // bomb state, time, and callbacks for shots, kills and the bomb.
   function stepBot(bot, dt, ctx) {
@@ -172,34 +201,24 @@ export function createBots(scene, world, random) {
     bot.shotTimer -= dt;
     bot.pauseTimer -= dt;
 
-    // Find a visible enemy: the player or the nearest living enemy bot.
-    let enemy = null;
-    let enemyPos = null;
     const eye = eyePos(bot);
-    const candidates = [];
-    if (ctx.playerAlive) candidates.push({ pos: new THREE.Vector3(ctx.playerPos.x, ctx.playerPos.y + 1.3, ctx.playerPos.z), kind: 'player', dist: 0 });
-    for (const other of bots) {
-      if (other.team !== bot.team && other.alive) {
-        candidates.push({ pos: new THREE.Vector3(other.position.x, other.position.y + 1.3, other.position.z), kind: 'bot', bot: other, dist: 0 });
-      }
-    }
-    let bestDist = Infinity;
-    for (const c of candidates) {
-      c.dist = eye.distanceTo(c.pos);
-      if (c.dist > 70) continue;
-      // Facing: within a 100-degree cone, or very close.
-      const to = new THREE.Vector3().subVectors(c.pos, eye).normalize();
-      const forward = new THREE.Vector3(-Math.sin(bot.yaw), 0, -Math.cos(bot.yaw));
-      const facing = to.dot(forward);
-      if (c.dist > 4 && facing < 0.2) continue;
-      if (!losClear(eye, c.pos)) continue;
-      if (c.dist < bestDist) { bestDist = c.dist; enemy = c; enemyPos = c.pos; }
-    }
+    const found = findEnemy(bot, eye, ctx);
+    const enemy = found ? found.enemy : null;
+    const enemyPos = found ? found.enemy.pos : null;
+    const bestDist = found ? found.dist : Infinity;
 
     if (enemy) {
+      // Reaction delay: the clock starts only when a NEW target is acquired. The
+      // target is the same entity while it stays visible, so the bot waits its
+      // reaction time and then opens fire in bursts.
+      const sameTarget = bot.target !== null
+        && bot.target.kind === enemy.kind
+        && (enemy.kind === 'player' || bot.target.bot === enemy.bot);
+      if (!sameTarget) {
+        bot.seenAt = now;
+        bot.reaction = REACTION_MIN + random() * (REACTION_MAX - REACTION_MIN);
+      }
       bot.target = enemy;
-      bot.seenAt = now;
-      bot.reaction = bot.reaction || REACTION_MIN + random() * (REACTION_MAX - REACTION_MIN);
       // Face the enemy.
       const dx = enemyPos.x - bot.position.x;
       const dz = enemyPos.z - bot.position.z;

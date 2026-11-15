@@ -1,8 +1,9 @@
 // The DOM HUD: health, ammo, timer, score, money, killfeed, banners and the buy
-// menu. It never touches the simulation; main.js pushes numbers in and reads the
-// play and buy callbacks out.
+// menu. It never touches the simulation. main.js pushes numbers in and reads the
+// play and buy callbacks out; this module only moves DOM.
 import { WEAPONS, GRENADE_PRICE, ARMOR_PRICE } from './weapon.js';
 
+// Overlay copy per state. The start text is also the game's one-line pitch.
 const COPY = {
   start: {
     title: 'Foundry Yard',
@@ -26,6 +27,16 @@ const COPY = {
   },
 };
 
+// Buy menu entries: one card per item, bought by click or number key. main.js owns
+// the money; this module only renders the cards.
+const BUY_ITEMS = [
+  { id: 'rifle', name: 'VK-9 Rifle', desc: 'Auto rifle, 30 rounds. The workhorse.', price: WEAPONS.rifle.price },
+  { id: 'smg', name: 'Hornet SMG', desc: 'Fast, close quarters. 32 rounds.', price: WEAPONS.smg.price },
+  { id: 'pistol', name: 'P-9 Pistol', desc: 'Cheap, accurate sidearm. 12 rounds.', price: WEAPONS.pistol.price },
+  { id: 'grenade', name: 'Frag grenade', desc: 'One grenade, thrown with G.', price: GRENADE_PRICE },
+  { id: 'armor', name: 'Kevlar vest', desc: 'Absorbs 60% of each hit until it breaks.', price: ARMOR_PRICE },
+];
+
 export function createHud() {
   const $ = (id) => document.getElementById(id);
   const els = {
@@ -40,8 +51,8 @@ export function createHud() {
     hitmarker: $('hitmarker'), crosshair: $('crosshair'), vignette: $('vignette'),
     buy: $('buy'), buyGrid: $('buy-grid'), buyMoney: $('buy-money'),
   };
-  let bannerTimer = 0;
-  let markerTimer = 0;
+  let bannerMs = 0;
+  let markerMs = 0;
   let onPlayCallback = null;
   let onBuyCallback = null;
 
@@ -95,13 +106,13 @@ export function createHud() {
   function hitMarker(kill, holdMs) {
     els.hitmarker.classList.add('on');
     els.hitmarker.classList.toggle('kill', !!kill);
-    markerTimer = holdMs;
+    markerMs = holdMs;
   }
   function showBanner(title, sub, holdMs = 2200) {
     els.bannerTitle.textContent = title;
     els.bannerSub.textContent = sub;
     els.banner.classList.add('on');
-    bannerTimer = holdMs;
+    bannerMs = holdMs;
   }
   function showPrompt(text, progress) {
     els.prompt.hidden = false;
@@ -125,14 +136,6 @@ export function createHud() {
     els.crosshair.style.transform = `translate(-50%, -50%) scale(${1 + px / 40})`;
   }
 
-  // Buy menu: one card per item, click or number key buys. main.js owns the money.
-  const BUY_ITEMS = [
-    { id: 'rifle', name: 'VK-9 Rifle', desc: 'Auto rifle, 30 rounds. The workhorse.', price: WEAPONS.rifle.price },
-    { id: 'smg', name: 'Hornet SMG', desc: 'Fast, close quarters. 32 rounds.', price: WEAPONS.smg.price },
-    { id: 'pistol', name: 'P-9 Pistol', desc: 'Cheap, accurate sidearm. 12 rounds.', price: WEAPONS.pistol.price },
-    { id: 'grenade', name: 'Frag grenade', desc: 'One grenade, thrown with G.', price: GRENADE_PRICE },
-    { id: 'armor', name: 'Kevlar vest', desc: 'Absorbs 60% of each hit until it breaks.', price: ARMOR_PRICE },
-  ];
   function renderBuy(money, ownedWeapon) {
     els.buyGrid.innerHTML = '';
     for (const item of BUY_ITEMS) {
@@ -151,14 +154,15 @@ export function createHud() {
   }
   function onBuy(cb) { onBuyCallback = cb; }
 
+  // Timers tick down in milliseconds; the banner and hitmarker clear themselves.
   function step(dt) {
-    if (bannerTimer > 0) {
-      bannerTimer -= dt * 1000;
-      if (bannerTimer <= 0) els.banner.classList.remove('on');
+    if (bannerMs > 0) {
+      bannerMs -= dt * 1000;
+      if (bannerMs <= 0) els.banner.classList.remove('on');
     }
-    if (markerTimer > 0) {
-      markerTimer -= dt * 1000;
-      if (markerTimer <= 0) els.hitmarker.classList.remove('on');
+    if (markerMs > 0) {
+      markerMs -= dt * 1000;
+      if (markerMs <= 0) els.hitmarker.classList.remove('on');
     }
   }
 

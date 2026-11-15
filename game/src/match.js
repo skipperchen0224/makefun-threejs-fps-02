@@ -1,7 +1,7 @@
-// The match: rounds, money, the bomb and the win. One object owns the whole state so
-// main.js never keeps a second copy of it. First to 8 rounds takes the match (15
-// rounds max); a round is won by eliminating the other team, by the bomb going off,
-// by a defuse, or by the defenders surviving the clock with no plant.
+// The match: rounds, money, the bomb and the win. One object owns the whole state,
+// so main.js never keeps a second copy of it. First to 8 rounds takes the match
+// (15 rounds max). A round is won by eliminating the other team, by the bomb going
+// off, by a defuse, or by the defenders surviving the clock with no plant.
 import { WEAPONS, GRENADE_PRICE, ARMOR_PRICE } from './weapon.js';
 
 export const BUY_SECONDS = 12;
@@ -38,30 +38,29 @@ export function createMatch(onEvent) {
     if (onEvent) onEvent(type, data);
   }
 
-  function startMatch() {
+  function freshRoundState() {
     state.phase = 'buy';
     state.phaseTime = BUY_SECONDS;
+    state.bomb = 'carried';
+    state.bombSite = null;
+    state.fuse = 0;
+    state.carrier = 'bot';
+  }
+
+  function startMatch() {
+    freshRoundState();
     state.round = 1;
     state.scoreEmber = 0;
     state.scoreSlate = 0;
     state.money = 800;
     state.kills = 0;
     state.deaths = 0;
-    state.bomb = 'carried';
-    state.bombSite = null;
-    state.fuse = 0;
-    state.carrier = 'bot';
     state.winner = null;
     emit('matchStart', { round: 1 });
   }
 
   function startRound() {
-    state.phase = 'buy';
-    state.phaseTime = BUY_SECONDS;
-    state.bomb = 'carried';
-    state.bombSite = null;
-    state.fuse = 0;
-    state.carrier = 'bot';
+    freshRoundState();
     emit('roundStart', { round: state.round });
   }
 
@@ -77,7 +76,8 @@ export function createMatch(onEvent) {
       state.money += LOSS_REWARD;
     }
     emit('roundEnd', { winner, reason, round: state.round, scoreEmber: state.scoreEmber, scoreSlate: state.scoreSlate });
-    if (state.scoreEmber >= WIN_ROUNDS || state.scoreSlate >= WIN_ROUNDS || state.round >= MAX_ROUNDS) {
+    const decided = state.scoreEmber >= WIN_ROUNDS || state.scoreSlate >= WIN_ROUNDS || state.round >= MAX_ROUNDS;
+    if (decided) {
       state.phase = 'matchEnd';
       state.phaseTime = 6;
       const matchWinner = state.scoreEmber === state.scoreSlate ? 'draw' : state.scoreEmber > state.scoreSlate ? 'ember' : 'slate';
@@ -89,9 +89,7 @@ export function createMatch(onEvent) {
   }
 
   function step(dt, alive) {
-    if (state.phase === 'buy' || state.phase === 'live' || state.phase === 'roundEnd' || state.phase === 'matchEnd') {
-      state.phaseTime -= dt;
-    }
+    state.phaseTime -= dt;
     if (state.phase === 'buy' && state.phaseTime <= 0) {
       state.phase = 'live';
       state.phaseTime = ROUND_SECONDS;

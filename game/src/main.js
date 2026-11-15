@@ -1,8 +1,8 @@
-// Boot and the one loop: a fixed 60 Hz simulation feeding a render at the display's
-// rate. The player fights with four Ember bots against five Slate bots across rounds;
-// the charge must be planted at A or B, or the other team eliminated.
-// ?shot=start|play|end with &seed=N sets up a deterministic frame for a capture,
-// renders it twice, then freezes it and sets window.__shotReady.
+// Boot and the one loop. A fixed 60 Hz simulation feeds a render at the display's
+// rate. The player fights beside four Ember bots against five Slate bots, round
+// after round; the charge goes down at A or B, or the other team is eliminated.
+// ?shot=start|play|end with &seed=N stages one deterministic frame for a capture,
+// paints it twice, freezes it and sets window.__shotReady.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 import { createWorld } from './world.js';
@@ -19,6 +19,7 @@ const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
 const seed = Number.parseInt(params.get('seed') ?? '1', 10) || 1;
 
+// Deterministic dice for captures; live play uses Math.random.
 function mulberry32(initial) {
   let a = initial;
   return function random() {
@@ -54,8 +55,8 @@ const player = createPlayer(world.colliders, { x: -24, z: 0, yaw: -Math.PI / 2 }
 
 const raycaster = new THREE.Raycaster();
 raycaster.far = 95;
-const direction = new THREE.Vector3();
-const tmpVec = new THREE.Vector3();
+const shotDir = new THREE.Vector3();
+const aimPoint = new THREE.Vector3();
 
 let elapsed = 0;
 let frozen = false;
@@ -66,12 +67,12 @@ let plantProgress = 0;
 let shake = 0;
 let targetSite = 'A';
 let lastBeepSecond = -1;
-const markerHoldMs = shot ? 4000 : 90;
+const markerMs = shot ? 4000 : 90;
 const grenades = [];
 const tracers = [];
 const tracerMat = new THREE.LineBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.9 });
 
-// The planted charge and the dropped charge, as small boxes with a blinking light.
+// The planted charge and the dropped charge: small boxes with a blinking light.
 const bombMesh = new THREE.Mesh(
   new THREE.BoxGeometry(0.45, 0.25, 0.3),
   new THREE.MeshStandardMaterial({ color: 0xe5484d, roughness: 0.5, emissive: 0x550000 }),
@@ -133,6 +134,7 @@ function setupRound() {
   const slate = bots.bots.filter((b) => b.team === 'slate');
   const toTarget = targetSite === 'A' ? ['toA', 'toAMid'] : ['toB', 'toBMid'];
   const toOther = other === 'A' ? ['toA', 'toAMid'] : ['toB', 'toBMid'];
+  // Routes are waypoint keys; setRoute resolves them against the world's graph.
   bots.setRoute(ember[0], world.routes[toTarget[Math.floor(random() * 2)]]);
   bots.setRoute(ember[1], world.routes[toOther[Math.floor(random() * 2)]]);
   bots.setRoute(ember[2], world.routes[toTarget[Math.floor(random() * 2)]]);
@@ -237,18 +239,19 @@ function addTracer(from, to) {
   tracers.push({ line, left: 0.07 });
 }
 
+// One trigger pull: spend a round, cast a ray with spread, resolve the hit.
 function shoot(spread) {
   if (!weapon.takeRound()) return false;
-  camera.getWorldDirection(direction);
-  direction.x += (random() * 2 - 1) * spread;
-  direction.y += (random() * 2 - 1) * spread;
-  direction.z += (random() * 2 - 1) * spread;
-  direction.normalize();
+  camera.getWorldDirection(shotDir);
+  shotDir.x += (random() * 2 - 1) * spread;
+  shotDir.y += (random() * 2 - 1) * spread;
+  shotDir.z += (random() * 2 - 1) * spread;
+  shotDir.normalize();
   scene.updateMatrixWorld(true);
-  raycaster.set(camera.position, direction);
+  raycaster.set(camera.position, shotDir);
   const targets = world.shootables.concat(bots.hitMeshes());
   const hit = raycaster.intersectObjects(targets, false)[0];
-  const muzzlePos = camera.position.clone().add(direction.clone().multiplyScalar(0.6));
+  const muzzlePos = camera.position.clone().add(shotDir.clone().multiplyScalar(0.6));
   if (hit) {
     addTracer(muzzlePos, hit.point);
     const bot = hit.object.userData.bot;
@@ -257,7 +260,7 @@ function shoot(spread) {
       const d = weapon.def();
       const dmg = part === 'head' ? d.headDamage : d.damage;
       const killed = bots.damage(bot, dmg, part);
-      hud.hitMarker(killed, markerHoldMs);
+      hud.hitMarker(killed, markerMs);
       if (killed) {
         match.awardKill();
         hud.feed('You', bot.name, part === 'head');
@@ -270,7 +273,7 @@ function shoot(spread) {
       }
     }
   } else {
-    addTracer(muzzlePos, camera.position.clone().add(direction.clone().multiplyScalar(60)));
+    addTracer(muzzlePos, camera.position.clone().add(shotDir.clone().multiplyScalar(60)));
   }
   audio.shot(weapon.state.id);
   const d = weapon.def();
@@ -282,16 +285,16 @@ function shoot(spread) {
 
 function throwGrenade() {
   if (!weapon.takeGrenade()) return;
-  camera.getWorldDirection(direction);
+  camera.getWorldDirection(shotDir);
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.09, 10, 8),
     new THREE.MeshStandardMaterial({ color: 0x2a2a26, roughness: 0.6, metalness: 0.4 }),
   );
-  mesh.position.copy(camera.position).add(direction.clone().multiplyScalar(0.5));
+  mesh.position.copy(camera.position).add(shotDir.clone().multiplyScalar(0.5));
   scene.add(mesh);
   grenades.push({
     mesh,
-    vel: direction.clone().multiplyScalar(17).add(new THREE.Vector3(0, 4.5, 0)),
+    vel: shotDir.clone().multiplyScalar(17).add(new THREE.Vector3(0, 4.5, 0)),
     fuse: 1.6,
   });
   audio.click();
@@ -341,6 +344,8 @@ function onPlayerDeath() {
   }
 }
 
+// The context the bots' brains run against: the player, the bomb, the clock,
+// and the callbacks for their shots and their plant/defuse channels.
 function botShotCtx() {
   return {
     time: elapsed,
@@ -397,6 +402,13 @@ function botShotCtx() {
   };
 }
 
+// Nearest site ring to a position, and its letter.
+function nearestSite(pos) {
+  const da = Math.hypot(pos.x - world.siteA.x, pos.z - world.siteA.z);
+  const db = Math.hypot(pos.x - world.siteB.x, pos.z - world.siteB.z);
+  return da < db ? { site: world.siteA, name: 'A', dist: da } : { site: world.siteB, name: 'B', dist: db };
+}
+
 function step(dt) {
   elapsed += dt;
   shake = Math.max(0, shake - dt * 2.5);
@@ -407,7 +419,7 @@ function step(dt) {
   match.step(dt, alive);
 
   if (match.state.phase === 'buy') {
-    // Freeze time: nobody moves or shoots, but the weapon may finish a reload.
+    // Frozen time: nobody moves or shoots, but a reload may finish.
     weapon.step(dt);
     hud.step(dt);
     return;
@@ -418,7 +430,7 @@ function step(dt) {
     weapon.step(dt);
     bots.step(dt, botShotCtx());
 
-    // Dropped charge: anyone on Ember walking over it picks it up.
+    // Dropped charge: any Ember walking over it picks it up.
     if (match.state.bomb === 'dropped' && match.state.bombPos) {
       const bp = match.state.bombPos;
       if (player.state.alive && Math.hypot(player.state.position.x - bp.x, player.state.position.z - bp.z) < 1.6) {
@@ -435,18 +447,16 @@ function step(dt) {
 
     // Planting: the carrier holds E inside a site ring.
     if (match.state.bomb === 'carried' && match.state.carrier === 'player' && player.state.alive) {
-      const site = Math.hypot(player.state.position.x - world.siteA.x, player.state.position.z - world.siteA.z) < Math.hypot(player.state.position.x - world.siteB.x, player.state.position.z - world.siteB.z) ? world.siteA : world.siteB;
-      const siteName = site === world.siteA ? 'A' : 'B';
-      const d = Math.hypot(player.state.position.x - site.x, player.state.position.z - site.z);
-      if (d < site.radius && input.state.keys.has('KeyE')) {
+      const { site, name, dist } = nearestSite(player.state.position);
+      if (dist < site.radius && input.state.keys.has('KeyE')) {
         plantProgress += dt;
-        hud.showPrompt(`Planting the charge at Site ${siteName} — hold E`, plantProgress / PLANT_SECONDS);
+        hud.showPrompt(`Planting the charge at Site ${name} — hold E`, plantProgress / PLANT_SECONDS);
         if (Math.floor(plantProgress * 2) !== lastBeepSecond) {
           lastBeepSecond = Math.floor(plantProgress * 2);
           audio.plantBeep();
         }
         if (plantProgress >= PLANT_SECONDS) {
-          match.plant(siteName);
+          match.plant(name);
           plantProgress = 0;
           hud.hidePrompt();
         }
@@ -605,8 +615,8 @@ function runShot(name) {
     if (enemy) {
       enemy.position.set(6, 0, -4);
       enemy.group.position.copy(enemy.position);
-      tmpVec.set(enemy.position.x, enemy.position.y + 1.2, enemy.position.z);
-      aimAt(tmpVec);
+      aimPoint.set(enemy.position.x, enemy.position.y + 1.2, enemy.position.z);
+      aimAt(aimPoint);
       for (let i = 0; i < 4 && enemy.alive; i += 1) {
         shoot(0);
         settle(6);
@@ -629,8 +639,8 @@ function runShot(name) {
   player.state.position.set(-12, 0, -6);
   settle(240);
   match.state.fuse = 28;
-  tmpVec.set(site.x, 1.2, site.z);
-  aimAt(tmpVec);
+  aimPoint.set(site.x, 1.2, site.z);
+  aimAt(aimPoint);
   hud.setScore(1, 0, 1);
   hud.setBombPlanted(28);
   hud.showBanner('Round won', 'The charge detonated — Site A is ours.');

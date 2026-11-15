@@ -5,6 +5,8 @@
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 
+// The arsenal. Damage is per body hit; headDamage is the headshot number. fireGap
+// is seconds between rounds, magSize the magazine, reserve the spare ammo.
 export const WEAPONS = {
   rifle: {
     id: 'rifle', name: 'VK-9 Rifle', sub: 'Auto · $2700', price: 2700, auto: true,
@@ -29,6 +31,9 @@ export const GRENADE_PRICE = 300;
 export const ARMOR_PRICE = 650;
 
 const MUZZLE_TIME = 0.05;
+
+// The view model changes shape per gun: long rifle, short smg, stubby pistol.
+const MODEL_SCALE = { rifle: 1, smg: 0.8, pistol: 0.55 };
 
 export function createWeapon(camera) {
   const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.7, metalness: 0.25 });
@@ -77,9 +82,7 @@ export function createWeapon(camera) {
     state.cooldown = 0;
     state.reloading = 0;
     state.bloom = 0;
-    // The view model changes shape per gun: long rifle, short smg, stubby pistol.
-    const scale = id === 'smg' ? 0.8 : id === 'pistol' ? 0.55 : 1;
-    model.scale.set(scale, scale, scale);
+    model.scale.setScalar(MODEL_SCALE[id]);
     return true;
   }
 

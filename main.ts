@@ -23,14 +23,18 @@ const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 const gameDir = join(here, 'game');
 const shotsDir = join(here, 'screenshots');
 
+// The gate's own caps, from the kit's reference/gate.json.
+const GAME_MAX_ENTRIES = 993;
+const GAME_MAX_BYTES = 48 * 1024 * 1024;
+const SHOT_MAX_BYTES = 256 * 1024;
+const DOSSIER_TEXT_MAX_BYTES = 163840;
+
 function fail(message) {
   throw new Error(`main.ts: ${message}`);
 }
 
-// The gate's own caps (the kit's reference/gate.json): game/ at most 993 files and
-// directories and 48 MiB in all, 3 to 4 screenshots of at most 256 KiB each, the
-// dossier at most 1.5 MiB with its text capped at 163,840 bytes. Check the inputs
-// before copying so a bad tree fails loudly here instead of at the gate.
+// Walk a tree and count its entries and bytes. The gate refuses symlinks in
+// game/, so a symlink fails here instead of shipping one.
 function countTree(dir) {
   let entries = 0;
   let bytes = 0;
@@ -39,7 +43,6 @@ function countTree(dir) {
     const current = stack.pop();
     for (const name of readdirSync(current)) {
       const path = join(current, name);
-      // The gate refuses symlinks in game/: fail here instead of shipping one.
       if (lstatSync(path).isSymbolicLink()) fail(`${path} is a symlink, the gate takes plain files only`);
       const stat = statSync(path);
       entries += 1;
@@ -50,20 +53,26 @@ function countTree(dir) {
   return { entries, bytes };
 }
 
-if (!existsSync(join(gameDir, 'index.html'))) fail('game/index.html is missing');
-if (!existsSync(join(gameDir, 'vendor', 'three', 'three.module.min.js'))) fail('game/vendor/three/three.module.min.js is missing');
-if (!existsSync(join(gameDir, 'vendor', 'three', 'three.core.min.js'))) fail('game/vendor/three/three.core.min.js is missing');
+// Check the inputs before copying anything, so a bad tree fails loudly here
+// instead of at the gate.
+function checkInputs() {
+  for (const needed of ['index.html', join('vendor', 'three', 'three.module.min.js'), join('vendor', 'three', 'three.core.min.js')]) {
+    if (!existsSync(join(gameDir, needed))) fail(`game/${needed} is missing`);
+  }
+  const gameSize = countTree(gameDir);
+  if (gameSize.entries > GAME_MAX_ENTRIES) fail(`game/ holds ${gameSize.entries} entries, over the gate's ${GAME_MAX_ENTRIES}`);
+  if (gameSize.bytes > GAME_MAX_BYTES) fail(`game/ holds ${gameSize.bytes} bytes, over the gate's 48 MiB`);
 
-const gameSize = countTree(gameDir);
-if (gameSize.entries > 993) fail(`game/ holds ${gameSize.entries} entries, over the gate's 993`);
-if (gameSize.bytes > 48 * 1024 * 1024) fail(`game/ holds ${gameSize.bytes} bytes, over the gate's 48 MiB`);
-
-const shots = existsSync(shotsDir) ? readdirSync(shotsDir).filter((n) => !n.startsWith('.')) : [];
-if (shots.length < 3 || shots.length > 4) fail(`screenshots/ holds ${shots.length} images, the gate wants 3 or 4`);
-for (const name of shots) {
-  const size = statSync(join(shotsDir, name)).size;
-  if (size > 256 * 1024) fail(`screenshots/${name} is ${size} bytes, over the gate's 256 KiB`);
+  const shots = existsSync(shotsDir) ? readdirSync(shotsDir).filter((n) => !n.startsWith('.')) : [];
+  if (shots.length < 3 || shots.length > 4) fail(`screenshots/ holds ${shots.length} images, the gate wants 3 or 4`);
+  for (const name of shots) {
+    const size = statSync(join(shotsDir, name)).size;
+    if (size > SHOT_MAX_BYTES) fail(`screenshots/${name} is ${size} bytes, over the gate's 256 KiB`);
+  }
+  return { gameSize, shots };
 }
+
+const { gameSize, shots } = checkInputs();
 
 mkdirSync(out, { recursive: true });
 cpSync(gameDir, join(out, 'game'), { recursive: true });
@@ -72,7 +81,7 @@ if (existsSync(shotsDir)) cpSync(shotsDir, join(out, 'screenshots'), { recursive
 
 writeFileSync(
   join(out, 'dossier.json'),
-  buildDossier(out, { text_max_bytes: 163840, screenshots: { max: 4, max_bytes: 262144 }, game_max_files: 993, game_max_bytes: 50331648 }),
+  buildDossier(out, { text_max_bytes: DOSSIER_TEXT_MAX_BYTES, screenshots: { max: 4, max_bytes: 262144 }, game_max_files: GAME_MAX_ENTRIES, game_max_bytes: 50331648 }),
 );
 
 const dossierBytes = statSync(join(out, 'dossier.json')).size;
