@@ -346,6 +346,31 @@ function onPlayerDeath() {
   }
 }
 
+// A bot's bullet lands: the player takes damage (and may die), or another bot
+// takes it and the feed, kill and bomb-drop bookkeeping runs.
+function resolveBotShot(shooter, victim, hit, headshot) {
+  audio.enemyShot();
+  if (!hit || !victim) return;
+  if (victim.kind === 'player') {
+    if (!player.state.alive) return;
+    const wound = headshot ? 55 : 22 + Math.floor(random() * 10);
+    player.damage(wound);
+    hud.damageFlash();
+    hud.setHealth(player.state.health, player.state.armor);
+    audio.hurt();
+    if (!player.state.alive) onPlayerDeath();
+    return;
+  }
+  const target = victim.bot;
+  if (!target || !target.alive) return;
+  const wound = headshot ? 70 : 26;
+  const down = bots.damage(target, wound, headshot ? 'head' : 'body');
+  if (!down) return;
+  hud.feed(shooter.name, target.name, headshot);
+  const carrierFell = target.role === 'carrier' && match.state.bomb === 'carried' && match.state.carrier === 'bot';
+  if (carrierFell) match.dropBomb(target.position);
+}
+
 // The context the bots' brains run against: the player, the bomb, the clock,
 // and the callbacks for their shots and their plant/defuse channels.
 function botShotCtx() {
@@ -358,30 +383,11 @@ function botShotCtx() {
     targetSite,
     plantedSite: match.state.bombSite,
     onBotShot(bot, from, end, hit, headshot, enemy) {
-      audio.enemyShot();
-      if (!hit || !enemy) return;
-      if (enemy.kind === 'player') {
-        if (!player.state.alive) return;
-        const dmg = headshot ? 55 : 22 + Math.floor(random() * 10);
-        player.damage(dmg);
-        hud.damageFlash();
-        hud.setHealth(player.state.health, player.state.armor);
-        audio.hurt();
-        if (!player.state.alive) onPlayerDeath();
-      } else if (enemy.bot && enemy.bot.alive) {
-        const dmg = headshot ? 70 : 26;
-        const killed = bots.damage(enemy.bot, dmg, headshot ? 'head' : 'body');
-        if (killed) {
-          hud.feed(bot.name, enemy.bot.name, headshot);
-          if (enemy.bot.role === 'carrier' && match.state.bomb === 'carried' && match.state.carrier === 'bot') {
-            match.dropBomb(enemy.bot.position);
-          }
-        }
-      }
+      resolveBotShot(bot, enemy, hit, headshot);
     },
     onChannel(bot, kind, t) {
       if (kind === 'plant') {
-        const site = Math.hypot(bot.position.x - world.siteA.x, bot.position.z - world.siteA.z) < Math.hypot(bot.position.x - world.siteB.x, bot.position.z - world.siteB.z) ? 'A' : 'B';
+        const site = nearestSite(bot.position).name;
         if (t >= PLANT_SECONDS) {
           match.plant(site);
           return true;
@@ -409,6 +415,36 @@ function nearestSite(pos) {
   const da = Math.hypot(pos.x - world.siteA.x, pos.z - world.siteA.z);
   const db = Math.hypot(pos.x - world.siteB.x, pos.z - world.siteB.z);
   return da < db ? { site: world.siteA, name: 'A', dist: da } : { site: world.siteB, name: 'B', dist: db };
+}
+
+// Grenades fly, bounce once off walls and the floor, and blow on their fuse.
+function stepGrenades(dt) {
+  for (let i = grenades.length - 1; i >= 0; i -= 1) {
+    const shell = grenades[i];
+    shell.fuse -= dt;
+    shell.vel.y -= 14 * dt;
+    const landing = shell.mesh.position.clone().add(shell.vel.clone().multiplyScalar(dt));
+    const box = new THREE.Box3();
+    box.min.set(landing.x - 0.09, landing.y - 0.09, landing.z - 0.09);
+    box.max.set(landing.x + 0.09, landing.y + 0.09, landing.z + 0.09);
+    if (world.colliders.some((c) => box.intersectsBox(c))) {
+      shell.vel.multiplyScalar(-0.35);
+      shell.vel.y = Math.abs(shell.vel.y) * 0.4;
+      audio.bounce();
+    } else {
+      shell.mesh.position.copy(landing);
+    }
+    if (shell.mesh.position.y < 0.09) {
+      shell.mesh.position.y = 0.09;
+      shell.vel.y = Math.abs(shell.vel.y) * 0.4;
+      shell.vel.x *= 0.7;
+      shell.vel.z *= 0.7;
+    }
+    if (shell.fuse <= 0) {
+      grenades.splice(i, 1);
+      explodeGrenade(shell);
+    }
+  }
 }
 
 function step(dt) {
@@ -471,32 +507,7 @@ function step(dt) {
     }
 
     // Grenades fly, bounce once, and blow on their fuse.
-    for (let i = grenades.length - 1; i >= 0; i -= 1) {
-      const g = grenades[i];
-      g.fuse -= dt;
-      g.vel.y -= 14 * dt;
-      const next = g.mesh.position.clone().add(g.vel.clone().multiplyScalar(dt));
-      const probe = new THREE.Box3();
-      probe.min.set(next.x - 0.09, next.y - 0.09, next.z - 0.09);
-      probe.max.set(next.x + 0.09, next.y + 0.09, next.z + 0.09);
-      if (world.colliders.some((c) => probe.intersectsBox(c))) {
-        g.vel.multiplyScalar(-0.35);
-        g.vel.y = Math.abs(g.vel.y) * 0.4;
-        audio.bounce();
-      } else {
-        g.mesh.position.copy(next);
-      }
-      if (g.mesh.position.y < 0.09) {
-        g.mesh.position.y = 0.09;
-        g.vel.y = Math.abs(g.vel.y) * 0.4;
-        g.vel.x *= 0.7;
-        g.vel.z *= 0.7;
-      }
-      if (g.fuse <= 0) {
-        grenades.splice(i, 1);
-        explodeGrenade(g);
-      }
-    }
+    stepGrenades(dt);
     for (let i = tracers.length - 1; i >= 0; i -= 1) {
       tracers[i].left -= dt;
       if (tracers[i].left <= 0) {
