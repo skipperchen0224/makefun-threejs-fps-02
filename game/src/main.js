@@ -249,51 +249,59 @@ function shoot(spread) {
   shotDir.normalize();
   scene.updateMatrixWorld(true);
   raycaster.set(camera.position, shotDir);
-  const targets = world.shootables.concat(bots.hitMeshes());
-  const hit = raycaster.intersectObjects(targets, false)[0];
-  const muzzlePos = camera.position.clone().add(shotDir.clone().multiplyScalar(0.6));
-  if (hit) {
-    addTracer(muzzlePos, hit.point);
-    const bot = hit.object.userData.bot;
-    if (bot && bot.alive) {
-      const part = hit.object.userData.part;
-      const d = weapon.def();
-      const dmg = part === 'head' ? d.headDamage : d.damage;
-      const killed = bots.damage(bot, dmg, part);
-      hud.hitMarker(killed, markerMs);
-      if (killed) {
-        match.awardKill();
-        hud.feed('You', bot.name, part === 'head');
-        audio.kill();
-        if (bot.role === 'carrier' && match.state.bomb === 'carried' && match.state.carrier === 'bot') {
-          match.dropBomb(bot.position);
-        }
-      } else {
-        audio.hit();
-      }
+  const hittables = world.shootables.concat(bots.hitMeshes());
+  const impact = raycaster.intersectObjects(hittables, false)[0];
+  const muzzle = camera.position.clone().add(shotDir.clone().multiplyScalar(0.6));
+  if (impact) {
+    addTracer(muzzle, impact.point);
+    const target = impact.object.userData.bot;
+    if (target && target.alive) {
+      const part = impact.object.userData.part;
+      const gun = weapon.def();
+      const dmg = part === 'head' ? gun.headDamage : gun.damage;
+      damageBotFromPlayer(target, dmg, part, true);
     }
   } else {
-    addTracer(muzzlePos, camera.position.clone().add(shotDir.clone().multiplyScalar(60)));
+    addTracer(muzzle, camera.position.clone().add(shotDir.clone().multiplyScalar(60)));
   }
   audio.shot(weapon.state.id);
-  const d = weapon.def();
-  player.recoil(d.recoilPitch + random() * 0.004, (random() * 2 - 1) * d.recoilYaw);
+  const gun = weapon.def();
+  player.recoil(gun.recoilPitch + random() * 0.004, (random() * 2 - 1) * gun.recoilYaw);
   hud.setAmmo(weapon.state.mag, weapon.state.reserve);
   hud.setCrosshairSpread(spread * 900);
   return true;
 }
 
+// The player's damage to a bot, shared by bullets and grenades: the hitmarker, the
+// kill reward, the feed, the sound, and the bomb drop when the carrier falls.
+// Bullets drop the bomb only while a bot actually carries it; a grenade drops it
+// whenever the carrier bot dies with the bomb still carried.
+function damageBotFromPlayer(bot, dmg, part, carrierMustBeBot) {
+  const killed = bots.damage(bot, dmg, part);
+  hud.hitMarker(killed, markerMs);
+  if (!killed) {
+    audio.hit();
+    return;
+  }
+  match.awardKill();
+  hud.feed('You', bot.name, part === 'head');
+  audio.kill();
+  const carrierDown = bot.role === 'carrier' && match.state.bomb === 'carried'
+    && (!carrierMustBeBot || match.state.carrier === 'bot');
+  if (carrierDown) match.dropBomb(bot.position);
+}
+
 function throwGrenade() {
   if (!weapon.takeGrenade()) return;
   camera.getWorldDirection(shotDir);
-  const mesh = new THREE.Mesh(
+  const shell = new THREE.Mesh(
     new THREE.SphereGeometry(0.09, 10, 8),
     new THREE.MeshStandardMaterial({ color: 0x2a2a26, roughness: 0.6, metalness: 0.4 }),
   );
-  mesh.position.copy(camera.position).add(shotDir.clone().multiplyScalar(0.5));
-  scene.add(mesh);
+  shell.position.copy(camera.position).add(shotDir.clone().multiplyScalar(0.5));
+  scene.add(shell);
   grenades.push({
-    mesh,
+    mesh: shell,
     vel: shotDir.clone().multiplyScalar(17).add(new THREE.Vector3(0, 4.5, 0)),
     fuse: 1.6,
   });
@@ -302,29 +310,23 @@ function throwGrenade() {
 
 function explodeGrenade(g) {
   scene.remove(g.mesh);
-  const pos = g.mesh.position;
+  const blastPos = g.mesh.position;
   audio.explosion();
   shake = 1.2;
   const flash = new THREE.PointLight(new THREE.Color(0xffa040), 60, 14, 1.5);
-  flash.position.copy(pos);
+  flash.position.copy(blastPos);
   scene.add(flash);
   setTimeout(() => scene.remove(flash), 180);
-  const victims = [];
+  // Blast falls off linearly to 6.5 m; damage is applied in one pass because
+  // damaging one bot never moves another.
   for (const bot of bots.bots) {
     if (!bot.alive) continue;
-    const d = Math.hypot(bot.position.x - pos.x, bot.position.y + 1 - pos.y, bot.position.z - pos.z);
-    if (d < 6.5) victims.push({ bot, d });
-  }
-  for (const { bot, d } of victims) {
+    const d = Math.hypot(bot.position.x - blastPos.x, bot.position.y + 1 - blastPos.y, bot.position.z - blastPos.z);
+    if (d >= 6.5) continue;
     const dmg = Math.max(15, Math.round(110 * (1 - d / 6.5)));
-    const killed = bots.damage(bot, dmg, 'body');
-    if (killed) {
-      match.awardKill();
-      hud.feed('You', bot.name, false);
-      if (bot.role === 'carrier' && match.state.bomb === 'carried') match.dropBomb(bot.position);
-    }
+    damageBotFromPlayer(bot, dmg, 'body', false);
   }
-  const pd = Math.hypot(player.state.position.x - pos.x, player.state.position.y + 1 - pos.y, player.state.position.z - pos.z);
+  const pd = Math.hypot(player.state.position.x - blastPos.x, player.state.position.y + 1 - blastPos.y, player.state.position.z - blastPos.z);
   if (pd < 6.5 && player.state.alive) {
     const dmg = Math.max(10, Math.round(90 * (1 - pd / 6.5)));
     player.damage(dmg);
